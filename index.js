@@ -10,7 +10,7 @@ const OpenAI      = require('openai');
 const BOT_TOKEN      = process.env.BOT_TOKEN;
 const CHANNEL_ID     = process.env.CHANNEL_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const CRON_SCHEDULE  = process.env.CRON_SCHEDULE || '0 9 * * *'; // каждый день в 09:00
+const CRON_SCHEDULE  = process.env.CRON_SCHEDULE || '0 9 * * *';
 const DIGEST_HOURS   = Number(process.env.DIGEST_HOURS) || 24;
 
 console.log('✅ ENV:', {
@@ -49,40 +49,53 @@ function isFresh(pubDate) {
   return (new Date() - new Date(pubDate)) <= DIGEST_HOURS * 3600_000;
 }
 
-// Краткий резюме текста через ИИ
+// Краткий резюме текста через ИИ с обработкой недостатка квоты
 async function summarizeRussian(text, maxTokens = 100) {
-  const prompt = `
-Дай краткое резюме на русском (1–2 предложения) следующего текста, выделив суть:
+  try {
+    const res = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [{ role: 'user', content: `
+Дай краткое резюме на русском (1–2 предложения) этого текста:
 "${text}"
-`;
-  const res = await openai.chat.completions.create({
-    model: 'gpt-3.5-turbo',
-    messages: [{ role: 'user', content: prompt }],
-    max_tokens: maxTokens,
-    temperature: 0.3
-  });
-  return res.choices[0].message.content.trim();
+      ` }],
+      max_tokens: maxTokens,
+      temperature: 0.3
+    });
+    return res.choices[0].message.content.trim() || text;
+  } catch (err) {
+    if (err.code === 'insufficient_quota') {
+      console.warn('⚠️ Квота исчерпана, используем оригинал вместо резюме.');
+      return text;
+    }
+    console.error('Ошибка в summarizeRussian:', err.message);
+    return text;
+  }
 }
 
-// Генерация обложки через DALL·E
+// Генерация обложки через DALL·E (также обрабатываем ошибки)
 async function generateCover(dateStr) {
-  const prompt = `
-Создай минималистичную иконографическую обложку для дайджеста новостей по фронтенд-разработке за ${dateStr}.
-Используй элементы HTML, CSS, JS и иконку браузера, в мягких тонах.
-`;
-  const res = await openai.images.generate({
-    prompt: prompt.trim(),
-    size: '800x400',
-    n: 1
-  });
-  return res.data[0].url;
+  try {
+    const prompt = `
+Создай минималистичную обложку для дайджеста фронтенд-новостей за ${dateStr}.
+Используй иконки HTML, CSS, JS и браузера в мягких тонах.
+    `;
+    const res = await openai.images.generate({
+      prompt: prompt.trim(),
+      size: '800x400',
+      n: 1
+    });
+    return res.data[0].url;
+  } catch (err) {
+    console.error('Ошибка генерации обложки:', err.message);
+    return null;
+  }
 }
 
 // Собираем и переводим дайджест
 async function buildDigest() {
   const now     = new Date();
-  const dateStr = now.toISOString().slice(0,10); // YYYY-MM-DD
-  const header  = `📰 *Дайджест фронтенд-новостей за ${dateStr}*\n`;
+  const dateStr = now.toISOString().slice(0,10);
+  const header  = `📰 *Фронтенд-дайджест за ${dateStr}*\n`;
   const lines   = [header];
 
   for (let { name, url } of feeds) {
@@ -90,48 +103,37 @@ async function buildDigest() {
     try {
       feed = await parser.parseURL(url);
     } catch (e) {
-      console.error(`Не загрузить ${name}:`, e.message);
+      console.error(`Не удалось загрузить ${name}:`, e.message);
       continue;
     }
-
     const items = feed.items
       .filter(i => i.pubDate && isFresh(i.pubDate))
-      .slice(0, 3);
-
+      .slice(0,3);
+    console.log(`Feed "${name}": найдено ${items.length}`);
     if (!items.length) continue;
+
     lines.push(`🔹 *${name}*`);
-
-    for (let item of items) {
-      // резюме заголовка и сниппета
-      const titleSum   = await summarizeRussian(item.title, 50);
-      const snippet    = item.contentSnippet || '';
-      const snippetSum = snippet ? await summarizeRussian(snippet, 80) : '';
-
-      lines.push(`• ${titleSum}`);
-      if (snippetSum) lines.push(`  _${snippetSum}_`);
-      lines.push(`  ▶ [Читать полностью](${item.link})\n`);
+    for (let { title, contentSnippet, link } of items) {
+      const textToSummarize = `${title}${contentSnippet ? ' — ' + contentSnippet : ''}`;
+      const summary = await summarizeRussian(textToSummarize, 80);
+      lines.push(`• ${summary}`);
+      lines.push(`  ▶ [Читать далее](${link})\n`);
     }
   }
 
   return lines.length > 1 ? lines.join('\n') : null;
 }
 
-// Отправка обложки и дайджеста
+// Отправляем обложку и дайджест
 async function sendDigest() {
-  const now     = new Date();
-  const dateStr = now.toISOString().slice(0,10);
-  // 1) Обложка
-  let coverUrl;
-  try {
-    coverUrl = await generateCover(dateStr);
+  const dateStr = new Date().toISOString().slice(0,10);
+  const coverUrl = await generateCover(dateStr);
+  if (coverUrl) {
     await bot.sendPhoto(CHANNEL_ID, coverUrl, {
       caption: `📰 *Фронтенд-дайджест за ${dateStr}*`,
       parse_mode: 'Markdown'
     });
-  } catch (e) {
-    console.error('Не удалось сгенерировать обложку:', e.message);
   }
-  // 2) Текст дайджеста
   const text = await buildDigest();
   if (!text) {
     console.log('Нет свежих новостей за период', DIGEST_HOURS, 'ч.');
@@ -141,16 +143,16 @@ async function sendDigest() {
     parse_mode: 'Markdown',
     disable_web_page_preview: true
   });
-  console.log('✅ Отправлен дайджест:', new Date().toISOString());
+  console.log('✅ Дайджест отправлен:', new Date().toISOString());
 }
 
 // Планировщик
 cron.schedule(CRON_SCHEDULE, () => {
-  console.log('Запуск sendDigest() по расписанию', CRON_SCHEDULE);
+  console.log('🚀 Запуск по расписанию', CRON_SCHEDULE);
   sendDigest();
 });
 
-// Тестовый запуск
+// Быстрый тест
 if (process.argv.includes('--run-now')) {
   sendDigest();
 }
