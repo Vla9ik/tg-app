@@ -11,10 +11,10 @@ const BOT_TOKEN      = process.env.BOT_TOKEN;
 const CHANNEL_ID     = process.env.CHANNEL_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const CRON_SCHEDULE  = process.env.CRON_SCHEDULE || '0 */12 * * *'; // каждые 12 часов
-const DIGEST_HOURS   = Number(process.env.DIGEST_HOURS) || 24;
+const DIGEST_HOURS   = Number(process.env.DIGEST_HOURS) || 24;      // последние 24 ч
 const FALLBACK_IMAGE = 'https://placehold.co/800x400?text=Frontend+Digest';
 
-// Проверяем, что env-переменные подхватились
+// Логируем коротко, что окружение подхватилось
 console.log('✅ ENV:', {
   BOT_TOKEN: !!BOT_TOKEN,
   CHANNEL_ID: !!CHANNEL_ID,
@@ -51,30 +51,30 @@ function isFresh(pubDate) {
   return (new Date() - new Date(pubDate)) <= DIGEST_HOURS * 3600_000;
 }
 
-// Перевод + краткое резюме моделью gpt-4o-mini
-async function translateAndSummarize(text, maxTokens = 150) {
+// Перевод + короткое резюме
+async function translateAndSummarize(text) {
   const prompt = `
-Переведи на русский и в 1–2 предложениях изложи суть этого текста:
+Переведи на русский и в 1–2 предложениях изложи суть:
 "${text}"
 `;
   try {
     const res = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: maxTokens,
+      max_tokens: 100,
       temperature: 0.3
     });
     return res.choices[0].message.content.trim() || text;
-  } catch {
-    // при ошибке просто возвращаем оригинал
+  } catch (err) {
+    console.warn('⚠️ Ошибка OpenAI, возвращаем оригинал:', err.message);
     return text;
   }
 }
 
-// Генерация обложки через DALL·E
+// Генерация обложки
 async function generateCover(dateStr) {
   const prompt = `
-Создай минималистичную обложку-иллюстрацию для дайджеста фронтенд-новостей за ${dateStr}.
+Создай минималистичную обложку для дайджеста фронтенд-новостей за ${dateStr}.
 Используй иконки HTML, CSS, JS и браузера.
 `;
   try {
@@ -85,11 +85,12 @@ async function generateCover(dateStr) {
     });
     return img.data[0].url;
   } catch {
+    console.warn('⚠️ Не удалось сгенерировать обложку, используем заглушку');
     return FALLBACK_IMAGE;
   }
 }
 
-// Собираем единый текст дайджеста
+// Собираем текст дайджеста
 async function buildDigest() {
   const dateStr = new Date().toISOString().slice(0,10);
   const header  = `📰 *Фронтенд-дайджест за ${dateStr}*\n`;
@@ -100,7 +101,8 @@ async function buildDigest() {
     try {
       feed = await parser.parseURL(url);
     } catch {
-      continue; // пропускаем недоступный фид
+      console.log(`ℹ️ Пропускаем ${name} (недоступен)`);
+      continue;
     }
     const items = feed.items
       .filter(i => i.pubDate && isFresh(i.pubDate))
@@ -110,47 +112,55 @@ async function buildDigest() {
     lines.push(`🔹 *${name}*`);
     for (let item of items) {
       const fullText = `${item.title}${item.contentSnippet ? ' — ' + item.contentSnippet : ''}`;
-      const result   = await translateAndSummarize(fullText, 100);
-      const [headline, ...rest] = result.split('\n');
+      const summary  = await translateAndSummarize(fullText);
+      const [headline, ...rest] = summary.split('\n');
       lines.push(`• [${headline.trim()}](${item.link})`);
-      if (rest.length) {
-        lines.push(`  Кратко: ${rest.join(' ').trim()}`);
-      }
+      if (rest.length) lines.push(`  Кратко: ${rest.join(' ').trim()}`);
     }
-    lines.push(''); // разделитель
+    lines.push('');
   }
 
   return lines.length > 1 ? lines.join('\n') : null;
 }
 
-// Отправляем сначала обложку, потом дайджест
+// Основная функция отправки
 async function sendDigest() {
   const dateStr = new Date().toISOString().slice(0,10);
   const cover   = await generateCover(dateStr);
 
-  // Отправка обложки
-  await bot.sendPhoto(CHANNEL_ID, cover, {
-    caption: `📰 *Фронтенд-дайджест за ${dateStr}*`,
-    parse_mode: 'Markdown'
-  });
+  try {
+    await bot.sendPhoto(CHANNEL_ID, cover, {
+      caption: `📰 *Фронтенд-дайджест за ${dateStr}*`,
+      parse_mode: 'Markdown'
+    });
+    console.log('✅ Обложка отправлена');
+  } catch (err) {
+    console.error('❌ Ошибка при отправке обложки:', err.message);
+  }
 
-  // Отправка текста
-  const text = await buildDigest();
-  if (text) {
+  try {
+    const text = await buildDigest();
+    if (!text) {
+      console.log('ℹ️ Нет свежих новостей за период', DIGEST_HOURS, 'ч.');
+      return;
+    }
     await bot.sendMessage(CHANNEL_ID, text, {
       parse_mode: 'Markdown',
       disable_web_page_preview: true
     });
+    console.log('✅ Дайджест отправлен');
+  } catch (err) {
+    console.error('❌ Ошибка при отправке дайджеста:', err.message);
   }
 }
 
-// Планировщик «каждые 12 часов»
+// Планировщик — каждые 12 часов
 cron.schedule(CRON_SCHEDULE, () => {
-  console.log(`🚀 Запуск дайджеста по расписанию (${CRON_SCHEDULE})`);
+  console.log('🚀 Запуск по расписанию', CRON_SCHEDULE);
   sendDigest();
 });
 
-// Быстрый тест
+// Тестовый запуск
 if (process.argv.includes('--run-now')) {
   sendDigest();
 }
