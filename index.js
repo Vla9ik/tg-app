@@ -26,7 +26,18 @@ const feeds = [
   { name: 'CSS-Tricks',               url: 'https://css-tricks.com/feed/' },
   { name: 'Dev.to (frontend)',        url: 'https://dev.to/feed/frontend' },
   { name: 'Frontend Focus',           url: 'https://frontendfoc.us/rss' },
-  // … другие ленты …
+  { name: 'A List Apart',             url: 'https://alistapart.com/feed/' },
+  { name: 'SitePoint (Front End)',    url: 'https://www.sitepoint.com/front-end/feed/' },
+  { name: 'JavaScript Weekly',        url: 'https://javascriptweekly.com/rss/' },
+  { name: 'CSS Weekly',               url: 'https://css-weekly.com/feed/' },
+  { name: 'HTML5 Weekly',             url: 'https://html5weekly.com/rss.xml' },
+  { name: 'React Status',             url: 'https://react.statuscode.com/rss' },
+  { name: 'Vue.js News',              url: 'https://news.vuejs.org/rss.xml' },
+  { name: 'Angular Blog',             url: 'https://blog.angular.io/feed.xml' },
+  { name: 'TypeScript Weekly',        url: 'https://www.typescriptweekly.com/rss.xml' },
+  { name: 'Reddit r/frontend',        url: 'https://www.reddit.com/r/frontend/.rss' },
+  { name: 'Hacker News (Front Page)', url: 'https://hnrss.org/frontpage' },
+  { name: 'Medium (Frontend Tag)',    url: 'https://medium.com/feed/tag/frontend' }
 ];
 
 const parser = new Parser();
