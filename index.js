@@ -1,17 +1,16 @@
-// index.js
+// 1) Сразу читаем .env (или реальные env-переменные)
+require('dotenv').config();
+
 console.log('✅ ENV:', {
   BOT_TOKEN: !!process.env.BOT_TOKEN,
   CHANNEL_ID: !!process.env.CHANNEL_ID,
   OPENAI:    !!process.env.OPENAI_API_KEY,
 });
 
-
-require('dotenv').config();
-
 const Parser      = require('rss-parser');
 const TelegramBot = require('node-telegram-bot-api');
 const cron        = require('node-cron');
-const OpenAI      = require('openai');           // <- новый импорт
+const OpenAI      = require('openai');
 
 // —————— КОНФИГУРАЦИЯ ——————
 const BOT_TOKEN      = process.env.BOT_TOKEN;
@@ -19,6 +18,9 @@ const CHANNEL_ID     = process.env.CHANNEL_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const CRON_SCHEDULE  = process.env.CRON_SCHEDULE || '0 * * * *';
 const DIGEST_HOURS   = Number(process.env.DIGEST_HOURS) || 24;
+
+// … остальной код без изменений …
+
 
 const feeds = [
   { name: 'Smashing Magazine',        url: 'https://www.smashingmagazine.com/feed/' },
