@@ -1,4 +1,11 @@
 // index.js
+console.log('✅ ENV:', {
+  BOT_TOKEN: !!process.env.BOT_TOKEN,
+  CHANNEL_ID: !!process.env.CHANNEL_ID,
+  OPENAI:    !!process.env.OPENAI_API_KEY,
+});
+
+
 require('dotenv').config();
 
 const Parser      = require('rss-parser');
