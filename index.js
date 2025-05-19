@@ -10,11 +10,11 @@ const OpenAI      = require('openai');
 const BOT_TOKEN      = process.env.BOT_TOKEN;
 const CHANNEL_ID     = process.env.CHANNEL_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const CRON_SCHEDULE  = process.env.CRON_SCHEDULE || '0 9 * * *';    // по умолчанию 09:00
-const DIGEST_HOURS   = Number(process.env.DIGEST_HOURS) || 24;      // последние 24 ч
+// теперь по умолчанию — раз в 12 часов (в 00:00 и 12:00)
+const CRON_SCHEDULE  = process.env.CRON_SCHEDULE || '0 */12 * * *';
+const DIGEST_HOURS   = Number(process.env.DIGEST_HOURS) || 24;
 const FALLBACK_IMAGE = 'https://placehold.co/800x400?text=Frontend+Digest';
 
-// Логи ENV
 console.log('✅ ENV:', {
   BOT_TOKEN: !!BOT_TOKEN,
   CHANNEL_ID: !!CHANNEL_ID,
@@ -23,7 +23,6 @@ console.log('✅ ENV:', {
   HOURS:     DIGEST_HOURS
 });
 
-// Список RSS-лент
 const feeds = [
   { name: 'Smashing Magazine',        url: 'https://www.smashingmagazine.com/feed/' },
   { name: 'CSS-Tricks',               url: 'https://css-tricks.com/feed/' },
@@ -52,7 +51,7 @@ function isFresh(pubDate) {
   return (new Date() - new Date(pubDate)) <= DIGEST_HOURS * 3600_000;
 }
 
-// Перевод и краткое резюме модели gpt-4o-mini
+// Перевод и краткое резюме моделью gpt-4o-mini
 async function translateAndSummarize(text, maxTokens = 150) {
   const prompt = `
 Переведи на русский и коротко (1–2 предложения) изложи суть этого текста:
@@ -68,7 +67,6 @@ async function translateAndSummarize(text, maxTokens = 150) {
     return res.choices[0].message.content.trim() || text;
   } catch (err) {
     console.warn('⚠️ OpenAI error:', err.code || err.message);
-    // Попытка просто перевести
     try {
       const tr = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
@@ -126,12 +124,9 @@ async function buildDigest() {
     for (let item of items) {
       const fullText = `${item.title}${item.contentSnippet ? ' — ' + item.contentSnippet : ''}`;
       const result   = await translateAndSummarize(fullText, 100);
-      // Первый абзац до переноса — заголовок, остальное — суть
       const [headline, ...rest] = result.split('\n');
       lines.push(`• [${headline.trim()}](${item.link})`);
-      if (rest.length) {
-        lines.push(`  Кратко: ${rest.join(' ').trim()}`);
-      }
+      if (rest.length) lines.push(`  Кратко: ${rest.join(' ').trim()}`);
     }
     lines.push('');  // разделитель
   }
@@ -159,7 +154,7 @@ async function sendDigest() {
   }
 }
 
-// Планировщик
+// Планировщик: каждые 12 часов
 cron.schedule(CRON_SCHEDULE, () => {
   console.log('🚀 Запуск по расписанию', CRON_SCHEDULE);
   sendDigest();
