@@ -1,4 +1,6 @@
 // index.js
+
+// 1) Сразу читаем .env (локально) — для Railway не влияет
 require('dotenv').config();
 
 const Parser      = require('rss-parser');
@@ -10,9 +12,10 @@ const OpenAI      = require('openai');
 const BOT_TOKEN      = process.env.BOT_TOKEN;
 const CHANNEL_ID     = process.env.CHANNEL_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const CRON_SCHEDULE  = process.env.CRON_SCHEDULE || '0 * * * *';
-const DIGEST_HOURS   = Number(process.env.DIGEST_HOURS) || 24;
+const CRON_SCHEDULE  = process.env.CRON_SCHEDULE || '0 * * * *';  // каждый час
+const DIGEST_HOURS   = Number(process.env.DIGEST_HOURS) || 24;    // последние 24ч
 
+// Проверка, что env подхватились
 console.log('✅ ENV:', {
   BOT_TOKEN: !!BOT_TOKEN,
   CHANNEL_ID: !!CHANNEL_ID,
@@ -21,6 +24,7 @@ console.log('✅ ENV:', {
   HOURS:     DIGEST_HOURS
 });
 
+// Список RSS-лент
 const feeds = [
   { name: 'Smashing Magazine',        url: 'https://www.smashingmagazine.com/feed/' },
   { name: 'CSS-Tricks',               url: 'https://css-tricks.com/feed/' },
@@ -40,14 +44,18 @@ const feeds = [
   { name: 'Medium (Frontend Tag)',    url: 'https://medium.com/feed/tag/frontend' }
 ];
 
+// —————— ИНИЦИАЛИЗАЦИЯ БИБЛИОТЕК ——————
 const parser = new Parser();
 const bot    = new TelegramBot(BOT_TOKEN, { polling: false });
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
+// Проверка свежести записи
 function isFresh(pubDate) {
-  return (new Date() - new Date(pubDate)) <= DIGEST_HOURS * 3600_000;
+  const ageMs = new Date() - new Date(pubDate);
+  return ageMs <= DIGEST_HOURS * 60 * 60 * 1000;
 }
 
+// Перевод через OpenAI с фоллбэком
 async function translateToRussian(text) {
   try {
     const res = await openai.chat.completions.create({
@@ -56,59 +64,67 @@ async function translateToRussian(text) {
       max_tokens: 200,
       temperature: 0.2
     });
-    return res.choices[0].message.content.trim() || text;
-  } catch {
+    const translated = res.choices[0].message.content.trim();
+    return translated || text;
+  } catch (err) {
+    console.error('Ошибка перевода:', err.message);
     return text;
   }
 }
 
+// Собираем единый текст дайджеста
 async function buildDigest() {
   const now     = new Date();
   const dateStr = now.toISOString().slice(0,16).replace('T',' ');
-  const header  = `📰 *Дайджест фронтенд-новостей за последние ${DIGEST_HOURS}ч (на ${dateStr})*\n`;
+  const header  = `📰 *Дайджест фронтенд-новостей за последние ${DIGEST_HOURS}ч (по состоянию на ${dateStr})*\n`;
   const lines   = [header];
 
   for (let { name, url } of feeds) {
-    const feed  = await parser.parseURL(url);
-    const items = feed.items
-      .filter(i => i.pubDate && isFresh(i.pubDate))
-      .slice(0, 3);
+    try {
+      const feed  = await parser.parseURL(url);
+      const items = feed.items
+        .filter(i => i.pubDate && isFresh(i.pubDate))
+        .slice(0, 3);
 
-    if (!items.length) continue;
+      console.log(`Feed "${name}": ${items.length} записей за период`);
 
-    lines.push(`🔹 *${name}*`);
-    for (let item of items) {
-      // Берём и переводим заголовок и сниппет
-      const titleRu   = await translateToRussian(item.title);
-      const snippet   = item.contentSnippet || '';
-      const snippetRu = snippet ? await translateToRussian(snippet) : '';
+      if (!items.length) continue;
 
-      lines.push(`• *${titleRu}*`);
-      if (snippetRu) {
-        lines.push(`  Кратко: ${snippetRu}`);
+      lines.push(`🔹 *${name}*`);
+      for (let item of items) {
+        console.log(`  • ${item.title}`);
+        const titleRu = await translateToRussian(item.title);
+        console.log(`    → ${titleRu}`);
+        lines.push(`• ${titleRu} — [читать](${item.link})`);
       }
-      lines.push(`  Читать дальше: [ссылка](${item.link})\n`);
+      lines.push(''); // разделитель
+    } catch (err) {
+      console.error(`Ошибка при парсинге ${name}:`, err.message);
     }
   }
 
+  // Если кроме заголовка нет ссылок — возвращаем null
   return lines.length > 1 ? lines.join('\n') : null;
 }
 
+// Отправляем единым сообщением
 async function sendDigest() {
-  const text = await buildDigest();
-  if (!text) {
-    console.log('Нет новостей за период', DIGEST_HOURS, 'ч.');
+  const digest = await buildDigest();
+  if (!digest) {
+    console.log('Нет свежих новостей за период', DIGEST_HOURS, 'ч.');
     return;
   }
-  await bot.sendMessage(CHANNEL_ID, text, {
+  await bot.sendMessage(CHANNEL_ID, digest, {
     parse_mode: 'Markdown',
     disable_web_page_preview: true
   });
   console.log('✅ Дайджест отправлен:', new Date().toISOString());
 }
 
+// Планируем по CRON_SCHEDULE
 cron.schedule(CRON_SCHEDULE, sendDigest);
 
+// Быстрый тест
 if (process.argv.includes('--run-now')) {
   sendDigest();
 }
